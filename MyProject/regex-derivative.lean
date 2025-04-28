@@ -1,6 +1,7 @@
 import Mathlib
 
 section Examples
+
 open RegularExpression Computability
 
 variable {α β γ} [DecidableEq α] (P : RegularExpression α)
@@ -76,20 +77,8 @@ example (f : α → β) :
 
 end Examples
 
-/-! ### Syntactic Monoid from Regular Expressions
-In this section, we construct the syntactic monoid of the language defined by a regular expression.
-We use the Brzozowski derivative operation from Mathlib to generate the finite set of distinct
-derivatives (residual regex states) of a regular expression r.
-By the Myhill–Nerode theorem, a regular language has finitely many distinct derivatives
-(equivalently, finitely many Myhill–Nerode equivalence classes)​
-​
-Using these as states (with a Fintype instance),
-we define the monoid of state transformations induced by input words.
-Multiplication in this monoid corresponds to word concatenation
-(implemented as function composition on states), and the identity is the empty word.
-This construction is fully constructive, so the monoid’s elements and multiplication can be evaluated via #eval. -/
 
-section SyntacticMonoidFromRegex
+section RegexDecidableEq
 
 open RegularExpression Finset
 
@@ -219,6 +208,41 @@ instance RegularExpression.decidableEq : DecidableEq (RegularExpression α) := b
   · apply isFalse; apply neq_neq; exact heq
   · apply isTrue; apply equal_equal; exact heq
 
+end RegexDecidableEq
+
+
+section REPR
+
+open Std (Format)
+open RegularExpression
+
+variable {α} [H : Repr α]
+
+def regex_reprPrec [H : Repr α] : RegularExpression α → ℕ → Format
+| 0 => fun _ => Format.text "0"
+| 1      => fun _ => Format.text "1"
+| char a => fun prec => Format.text "char " ++ (H.reprPrec a prec)
+| p + q  => fun prec =>
+  let fp := regex_reprPrec p (prec+1)
+  let fq := regex_reprPrec q (prec+1)
+  Format.text "(" ++ fp ++ Format.text " + " ++ fq ++ Format.text ")"
+| p * q  => fun prec =>
+  let fp := regex_reprPrec p (prec+1)
+  let fq := regex_reprPrec q (prec+1)
+  Format.text "(" ++ fp ++ Format.text " * " ++ fq ++ Format.text ")"
+| star p => fun prec => regex_reprPrec p prec ++ Format.text "*"
+
+instance regex_repr [Repr α] : Repr (RegularExpression α) where
+  reprPrec := regex_reprPrec
+
+end REPR
+
+
+section RegexDeriv
+
+namespace RegularExpression
+
+variable {α} [HFA : Fintype α] [DecidableEq α] [Repr α]
 
 #print Finset
 #print Fintype
@@ -227,87 +251,80 @@ instance RegularExpression.decidableEq : DecidableEq (RegularExpression α) := b
 #print Finset.image
 #print Finset.sup
 
-/-- Compute the one‐step derivative set of a single regex `P`:
-  { P.deriv a | a ∈ univ }. -/
-@[simp]
-def derivSetOf (P : RegularExpression α) : Finset (RegularExpression α) :=
-  Finset.image (P.deriv) (univ : Finset α)
+#print Set.Finite.toFinset_range
+#print Set.toFinset
+#print Fintype.ofFinset
+#print Set.Finite.ofFinset
+#print Finset.union_add
 
-/-- One‐step expansion of a set of regex‐states `S`:
-  include the states themselves plus all their one‐symbol derivatives. -/
-@[simp]
-def stepOnce (S : Finset (RegularExpression α)) : Finset (RegularExpression α) :=
-  S ∪ S.biUnion derivSetOf
+def deriv_finset : RegularExpression α → α →  Finset (RegularExpression α)
+  | 0, _ => {0}
+  | 1, _ => {0}
+  | char a₁, a₂ => if a₁ = a₂ then {1} else {0}
+  | P + Q, a => {deriv P a + deriv Q a}
+  | P * Q, a => if P.matchEpsilon then {deriv P a * Q + deriv Q a} else {deriv P a * Q}
+  | star P, a => {deriv P a * star P}
 
-/--
-The full finite set of all Brzozowski derivatives of `r`,
-obtained by iterating `stepOnce` up to `r.size + 1` times.
-Since each derivative strictly reduces the size of the regex,
-after `size + 1` steps we have collected every possible derivative.
--/
-@[simp]
-def derivatives_set (r : RegularExpression α) : Finset (RegularExpression α) :=
-  (Nat.iterate stepOnce (2 ^ r.size)) {r}
+def deriv_step (P : RegularExpression α) : Finset (RegularExpression α) :=
+  {P} ∪ Finset.biUnion (@Finset.univ α HFA) P.deriv_finset
 
-def Language.toDFA (L : Language α) : DFA α (Set.range L.leftQuotient)
+def deriv_word (P : RegularExpression α) (word : List α) : RegularExpression α :=
+  match word with
+  | [] => P
+  | a :: as => deriv_word (deriv P a) as
 
-#eval derivatives_set (char 'a' + char 'b')
-/-- Finite type of derivative states for regex `r` (each element is a regex in `derivatives_set r`). -/
-def DerivState (r : RegularExpression α) :=
-  {x // x ∈ derivatives_set r}
+inductive Test
+| a | b | c
+deriving DecidableEq, Inhabited, Repr, Fintype
 
-instance (r : RegularExpression α) : Fintype (DerivState r) :=
-  Fintype.subtype (derivatives_set r) (by intros x; trivial)
+def P0 : RegularExpression Test := 0
+def P1 : RegularExpression Test := 1
+def Pa : RegularExpression Test := char Test.a
+def Pb : RegularExpression Test := char Test.b
+def Pc : RegularExpression Test := char Test.c
 
-/-- The initial state corresponding to regex `r` itself, as a member of `DerivState r`. -/
-@[inline] def initial_state (r : RegularExpression α) : DerivState r :=
-  ⟨r, Finset.mem_insert_self _ _⟩  -- `r` is in the initial `derivatives_set r`
+def Pabc : RegularExpression Test := Pa + Pb + Pc
+def Pa_times_b : RegularExpression Test := Pa * Pb
+def Pa_star : RegularExpression Test := star Pa
+def P_sigma_star : RegularExpression Test := star Pabc
 
-/-- Transition function on derivative states: `step r s a` is the state reached by taking the Brzozowski derivative of state `s` on symbol `a`. -/
-@[inline] def step (r : RegularExpression α) (s : DerivState r) (a : α) : DerivState r :=
-  ⟨ (s.val).deriv a, Finset.mem_bind.mpr ⟨s.val, s.prop, Finset.mem_image_of_mem _ (Finset.mem_univ a)⟩ ⟩
+#eval Pabc
+#eval Pabc.deriv_step
+#eval (Pa_times_b.deriv Test.a).deriv Test.b
+#eval Pa_times_b.deriv_word [Test.a, Test.b]
+#eval P_sigma_star.deriv_step
 
-@[simp] lemma step_val (r : RegularExpression α) (s : DerivState r) (a : α) : (step r s a).val = s.val.deriv a :=
-  rfl
 
-/-- Apply a whole list of input symbols (word) to a derivative state. -/
-@[inline] def step_word (r : RegularExpression α) : DerivState r → List α → DerivState r
-| s, []      => s
-| s, (a::as) => step_word r (step r s a) as
 
-@[simp] lemma step_word_nil (r : RegularExpression α) (s : DerivState r) : step_word r s [] = s := rfl
-@[simp] lemma step_word_cons (r : RegularExpression α) (s : DerivState r) (a : α) (w : List α) :
-  step_word r s (a :: w) = step_word r (step r s a) w :=
-  rfl
+/-- The left quotients of a language are the states of an automaton that accepts the language. -/
+def toDFA (P : RegularExpression α): DFA α P.deriv_set where
+  step := fun s a =>
+    let r := (s : RegularExpression α).deriv a
+    ⟨r, Finset.mem_derivatives_set_of_deriv s.2 a⟩ -- apply Finset.mem_derivatives_set_self P
 
-/-- An element of the syntactic monoid of `r` is a function on `DerivState r` arising from some input word. -/
-def SyntacticMonoidElem (r : RegularExpression α) :=
-  { f : DerivState r → DerivState r // ∃ w : List α, ∀ (s : DerivState r), f s = step_word r s w }
+  start := ⟨P, by  sorry⟩ --apply Finset.mem_derivatives_set_self P
+  accept := { s | s.val.matchEpsilon }
 
-instance (r : RegularExpression α) : Inhabited (SyntacticMonoidElem r) :=
-  ⟨⟨id, ⟨[], λ s, rfl⟩⟩⟩  -- the empty word induces the identity transformation
+theorem toDFA_correct (P : RegularExpression α) :
+  (P.toDFA.accepts : Language α) = P.matches' := by
+  -- extensionality on the input list `xs`
+  funext xs
+  induction xs with
+  | nil =>
+    -- On `[]`, `foldl step start [] = start = P`, so acceptance ⇔ `matchEpsilon_my P`
+    show _ = _;
+    -- by definition `DFA.accepts` at `[]` checks `accept start`
+    dsimp [DFA.accepts, Language.accepts];
+    -- `accept start` is `matchEpsilon_my P`, which matches `matches'` at `[]`
+    simp [rmatch_iff_matches']
 
-/-- The monoid instance on `SyntacticMonoidElem r`, with multiplication as function composition (i.e. word concatenation). -/
-instance (r : RegularExpression α) : Monoid (SyntacticMonoidElem r) :=
-{ one := ⟨ id, ⟨[], λ s, rfl⟩ ⟩,
-  mul := λ x y,
-    ⟨ y.val ∘ x.val,
-      let ⟨wx, hx⟩ := x.property in
-      let ⟨wy, hy⟩ := y.property in
-      ⟨ wx ++ wy, λ s, by
-        { calc (y.val ∘ x.val) s
-               = y.val (x.val s)         := rfl
-           ... = step_word r (x.val s) wy := hy (x.val s)
-           ... = step_word r (step_word r s wx) wy
-                   := by rw [hx s]
-           ... = step_word r s (wx ++ wy)
-                   := by { induction wx generalizing s; simp [step_word, *] } } ⟩ ⟩,
-  one_mul := λ x, subtype.ext (Function.comp.left_id x.val),
-  mul_one := λ x, subtype.ext (Function.comp.right_id x.val),
-  mul_assoc := λ x y z, subtype.ext (Function.comp.assoc _ _ _) }
+  | cons a xs ih =>
+    -- For `a::xs`, DFA follows derivative then recurses
+    dsimp [DFA.accepts, Language.accepts, DFA.step];
+    -- `foldl step P (a::xs) = foldl step (deriv_my P a) xs`
+    simp only [List.foldl_cons];
+    -- Now apply the induction hypothesis on `xs` for the derivative
+    simp [ih]
 
-instance (r : RegularExpression α) : Fintype (SyntacticMonoidElem r) :=
-{ elems := ((@Finset.univ (List α) _).image $ λ w, ⟨λ s, step_word r s w, ⟨w, λ s, rfl⟩⟩),
-  complete := λ ⟨f, ⟨w, hf⟩⟩, Finset.mem_image.mpr ⟨w, Finset.mem_univ w, subtype.ext $ funext (hf)⟩ }
-
-end SyntacticMonoidFromRegex
+end RegularExpression
+end RegexDeriv
