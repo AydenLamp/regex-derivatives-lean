@@ -137,8 +137,10 @@ def b : RegularExpression Alphabet := char B
 def c : RegularExpression Alphabet := char C
 
 
-#eval nf ((a + b).deriv_word [A])
-#eval nf ((star (a * b)).deriv_word [A, B,])
+#eval nf ((a + b).deriv_word [C])
+#eval nf (((a * b)).deriv_word [A,B,C])
+
+#eval nf ((c * (star (a + b)) * c).deriv_word [C, A])
 
 #eval iterate_one  (c * (star (a + b)) * c)
 #eval iterate_two  (c * (star (a + b)) * c)
